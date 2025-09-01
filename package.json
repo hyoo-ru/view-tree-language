@@ -3,7 +3,7 @@
 	"displayName": "view-tree-language",
 	"description": "Advanced view.tree language support with IntelliSense, diagnostics, navigation, and live preview",
 	"repository": "https://github.com/stan-donarise/view.tree-language",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"publisher": "stan-donarise",
 	"engines": {
 		"vscode": "^1.76.0"
@@ -32,23 +32,8 @@
 			{
 				"command": "mam.createViewCssTs",
 				"title": "MAM: Create .view.css.ts"
-			},
-			{
-				"command": "viewTree.refreshPreview",
-				"title": "Refresh Preview",
-				"icon": "$(refresh)"
 			}
 		],
-		"views": {
-			"explorer": [
-				{
-					"id": "view-tree-preview",
-					"name": "View Tree Preview",
-					"type": "webview",
-					"when": "resourceExtname == .view.tree"
-				}
-			]
-		},
 		"menus": {
 			"explorer/context": [
 				{
@@ -70,13 +55,6 @@
 					"when": "resourceFilename =~ /\\.view\\.tree/",
 					"group": "2_workspace",
 					"command": "mam.createViewCssTs"
-				}
-			],
-			"view/title": [
-				{
-					"command": "viewTree.refreshPreview",
-					"when": "view == view-tree-preview",
-					"group": "navigation"
 				}
 			]
 		}

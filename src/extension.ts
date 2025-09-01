@@ -1,6 +1,7 @@
 import * as vscode from "vscode"
 import { DefinitionProvider } from "./definition-provider"
 import { CompletionProvider } from "./completion-provider"
+import { createViewCssTs, createViewTs, newModuleTs, newModuleViewTree } from './commands';
 
 interface ProjectData {
 	componentsWithProperties: Map<string, { properties: Set<string>; file: string }>
@@ -189,7 +190,7 @@ export function activate( context: vscode.ExtensionContext ) {
 	const completionProvider = new CompletionProvider( () => projectData )
 
 	// Регистрируем провайдеры для .view.tree файлов
-	const treeSelector = { scheme: "file", language: "tree" }
+	const treeSelector = { language: 'tree', pattern: '**/*.view.tree' }
 
 	context.subscriptions.push(
 		// Definition Provider (Go to Definition)
@@ -200,8 +201,13 @@ export function activate( context: vscode.ExtensionContext ) {
 			treeSelector,
 			completionProvider,
 			"$", // Trigger completion when typing $
-			"\t", // Trigger completion when indenting
 		),
+		
+		newModuleTs,
+		newModuleViewTree,
+		createViewTs,
+		createViewCssTs,
+		
 	)
 
 	// Отслеживаем изменения файлов
