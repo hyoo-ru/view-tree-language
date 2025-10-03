@@ -12,8 +12,8 @@ jobs:
           node-version: 12
       - run: npm ci
       - run: mkdir -p out/node_modules
-      - name: Publish to Visual Studio Marketplace
-        uses: HaaLeo/publish-vscode-extension@v0
+      - uses: HaaLeo/publish-vscode-extension@v0
+        if: github.ref == 'refs/heads/master'
         with:
           pat: ${{ secrets.VS_MARKETPLACE_TOKEN }}
           registryUrl: https://marketplace.visualstudio.com
