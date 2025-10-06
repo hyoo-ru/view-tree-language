@@ -1,189 +1,215 @@
-import * as vscode from 'vscode';
-import { SourceMapConsumer } from 'source-map-js'
-import { createViewCssTs, createViewTs, newModuleTs, newModuleViewTree } from './commands';
+import * as vscode from "vscode"
+import { DefinitionProvider } from "./definition-provider"
+import { CompletionProvider } from "./completion-provider"
 
-const locationsForNode = {
+interface ProjectData {
+	componentsWithProperties: Map<string, { properties: Set<string>; file: string }>
+}
 
-	'root_class': async function ( document: vscode.TextDocument, wordRange: vscode.Range ) {
+let projectData: ProjectData = {
+	componentsWithProperties: new Map(),
+}
 
-		const viewTsUri = vscode.Uri.file( document.uri.path.replace(/.tree$/, '.ts') )
-		const nodeName = document.getText( wordRange )
-		const classSymbol = await findClassSymbol( viewTsUri, '$' + nodeName )
-		if( classSymbol ) return [ new vscode.Location( viewTsUri, classSymbol.range ) ]
-		
-		const locationRange = new vscode.Range( new vscode.Position(0, 0), new vscode.Position(0, 0) )
-		return [ new vscode.Location( viewTsUri, locationRange ) ]
+async function refreshProjectData() {
+	console.log( "[view.tree] Refreshing project data..." )
+	projectData = await scanProject()
+}
 
-	},
+async function scanProject(): Promise<ProjectData> {
+	const data: ProjectData = {
+		componentsWithProperties: new Map(),
+	}
 
-	'class': async function ( document: vscode.TextDocument, wordRange: vscode.Range ) {
+	console.log( "[view.tree] Starting project scan..." )
 
-		const nodeName = document.getText( wordRange )
-		const parts = nodeName.split( '_' )
+	if( !vscode.workspace.workspaceFolders ) {
+		console.log( "[view.tree] No workspace folders found" )
+		return data
+	}
 
-		const firstCharRange = new vscode.Range( new vscode.Position(0, 0), new vscode.Position(0, 0) )
-		
-		const viewTreeUri = vscode.Uri.joinPath( mamUri(), parts.join( '/' ), parts.at(-1) + '.view.tree' )
-		if( await fileExist( viewTreeUri ) ) {
-			return [ new vscode.Location( viewTreeUri, firstCharRange ) ]
+	const tsFiles = await vscode.workspace.findFiles( "**/*.ts", "**/node_modules/**" )
+	const viewTreeFiles = await vscode.workspace.findFiles( "**/*.view.tree", "**/node_modules/**" )
+
+	for( const file of tsFiles ) {
+		if( file.path.endsWith( ".d.ts" ) ) {
+			continue
 		}
-		
-		const viewTreeUri2 = vscode.Uri.joinPath( mamUri(), [ ...parts, parts.at(-1) ].join( '/' ), parts.at(-1) + '.view.tree' )
-		if( await fileExist( viewTreeUri2 ) ) {
-			return [ new vscode.Location( viewTreeUri2, firstCharRange ) ]
+		const componentsFromFile = await getComponentsFromFile( file )
+		for( const [ component, properties ] of componentsFromFile ) {
+			data.componentsWithProperties.set( component, { properties, file: file.path } )
 		}
-		
-		const symbols = await vscode.commands.executeCommand('vscode.executeWorkspaceSymbolProvider', '$' + nodeName) as vscode.SymbolInformation[]
-		if( symbols[0] ) return [ symbols[0].location ]
-		
-		return [ new vscode.Location( viewTreeUri, firstCharRange ) ]
+	}
+	for( const file of viewTreeFiles ) {
+		const componentsFromFile = await getComponentsFromFile( file )
+		for( const [ component, properties ] of componentsFromFile ) {
+			data.componentsWithProperties.set( component, { properties, file: file.path } )
+		}
+	}
 
-	},
-
-	'comp': async function ( document: vscode.TextDocument, wordRange: vscode.Range ) {
-
-		const cssTsUri = vscode.Uri.file( document.uri.path.replace(/.tree$/, '.css.ts') )
-		const symbols: vscode.DocumentSymbol[] = await vscode.commands.executeCommand(
-			'vscode.executeDocumentSymbolProvider', 
-			cssTsUri,
-		)
-
-		const nodeName = document.getText( wordRange )
-		const symb = symbols?.[0]?.children.find( symb => symb.name == nodeName )
-		if( !symb ) return []
-		
-		const locations: any[] = await vscode.commands.executeCommand(
-			'vscode.executeDefinitionProvider', 
-			cssTsUri,
-			symb.selectionRange.start,
-		)
-		return locations.map( l=> new vscode.Location( l.targetUri, l.targetRange ) )
-
-	},
-
-	'prop': async function ( document: vscode.TextDocument, wordRange: vscode.Range ) {
-
-		const className = '$' + document.getText( document.getWordRangeAtPosition( new vscode.Position(0, 1) ) )
-
-		const viewTsUri = vscode.Uri.file( document.uri.path.replace(/.tree$/, '.ts') )
-		const nodeName = document.getText( wordRange )
-		const propSymbol = await findPropSymbol( viewTsUri, className, nodeName )
-		
-		if( !propSymbol ) return locationsForNode['comp']( document, wordRange )
-		
-		const locations: any[] = await vscode.commands.executeCommand(
-			'vscode.executeDefinitionProvider', 
-			viewTsUri,
-			propSymbol.selectionRange.start,
-		)
-		return locations.map( l=> new vscode.Location( l.targetUri, l.targetRange ) )
-
-	},
-
-	'sub_prop': async function ( document: vscode.TextDocument, wordRange: vscode.Range ) {
-
-		const sourceMapUri = vscode.Uri.file( document.uri.path.replace(/([^\/]*$)/, '-view.tree/$1.d.ts.map') )
-		const sourceMap = await vscode.workspace.openTextDocument( sourceMapUri )
-		
-		const consumer = new SourceMapConsumer( JSON.parse( sourceMap.getText() ) )
-
-		const genPos = consumer.generatedPositionFor({
-			source: (consumer as any).sources[ 0 ],
-			line: wordRange.start.line + 1,
-			column: wordRange.start.character + 1,
-		})
-		
-		const dts = vscode.Uri.file( document.uri.path.replace(/([^\/]*$)/, '-view.tree/$1.d.ts') )
-		const dtsDoc = await vscode.workspace.openTextDocument( dts )
-		const symbolPos = dtsDoc.lineAt( Number( genPos.line ) + 2 ).range.end.translate( 0, -5 )
-
-		const locations: any = await vscode.commands.executeCommand(
-			'vscode.executeDefinitionProvider', 
-			dts, 
-			symbolPos,
-		)
-		
-		return locations?.[0] ? [ new vscode.Location( locations[0].targetUri, locations[0].targetSelectionRange.end ) ] : []
-
-	},
-
+	console.log( `[view.tree] Scan complete: ${ data.componentsWithProperties.size } components with properties` )
+	return data
 }
 
-function mamUri() {
-	return vscode.workspace.workspaceFolders![0].uri
+function parseViewTreeFile( content: string ): { componentsWithProperties: Map<string, Set<string>> } {
+	const lines = content.split( "\n" )
+	let currentComponent: string | null = null
+
+	// Локальные данные для возврата
+	const componentsWithProperties = new Map<string, Set<string>>()
+
+	for( const line of lines ) {
+		const trimmed = line.trim()
+
+		// Берем только первое слово из строк без отступа
+		if( !line.startsWith( "\t" ) ) {
+			const words = trimmed.split( /\s+/ )
+			currentComponent = words[ 0 ]
+			componentsWithProperties.set( currentComponent, new Set() )
+			continue
+		}
+		if( !currentComponent ) continue
+
+		// Проверяем строки с одним табом и берем первое слово после пробела
+		if( !line.startsWith( "\t\t" ) ) {
+			const words = trimmed.split( /\s+/ )
+			componentsWithProperties.get( currentComponent )!.add( words[ 0 ] )
+		}
+
+		const matches = trimmed.matchAll( /(?:=>|<=>|<=) (\w*)/g )
+		for( const match of matches ) {
+			componentsWithProperties.get( currentComponent )!.add( match[ 1 ] )
+		}
+	}
+
+	return { componentsWithProperties }
 }
 
-function getNodeType( document: vscode.TextDocument, wordRange: vscode.Range ) {
-	if( wordRange.start.character == 1 && wordRange.start.line == 0 ) return 'root_class'
+function parseTsFile( content: string ): { componentsWithProperties: Map<string, Set<string>> } {
+	// Ищем только первый $компонент в TypeScript файле
+	const lines = content.split( "\n" )
+	let currentClass: string | null = null
 
-	const firstChar = document.getText( new vscode.Range( wordRange.start.translate(0, -1), wordRange.start ) )
-	if( firstChar == '$') return 'class'
-	
-	// const rightNodeChar = document.getText( new vscode.Range( wordRange.end.translate(0, 1), wordRange.end.translate(0, 2) ) )
-	// if( rightNodeChar == '$' ) return 'comp'
-	// const rightNodeCharAfterAsterisk = document.getText( new vscode.Range( wordRange.end.translate(0, 2), wordRange.end.translate(0, 3) ) )
-	// if( rightNodeCharAfterAsterisk == '$' ) return 'comp'
+	// Локальные данные для возврата
+	const componentsWithProperties = new Map<string, Set<string>>()
 
-	if( wordRange.start.character == 1 ) return 'prop'
-	const leftNodeChar = document.getText( new vscode.Range( wordRange.start.translate(0, -2), wordRange.start.translate(0, -1) ) )
-	if( [ '>', '=', '^' ].includes( leftNodeChar ) ) return 'prop'
+	for( const line of lines ) {
+		// Если еще не нашли компонент, ищем объявление класса с $ компонентом
+		if( !currentClass ) {
+			const classMatch = line.match( /export\s+class\s+(\$\w+)/ )
+			if( classMatch ) {
+				currentClass = classMatch[ 1 ]
+				if( !componentsWithProperties.has( currentClass ) ) {
+					componentsWithProperties.set( currentClass, new Set() )
+				}
+			}
+		}
 
-	return 'sub_prop'
+		// Ищем методы с двумя табами (свойства компонента)
+		if( currentClass ) {
+			const methodMatch = line.match( /^\t\t([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/ )
+			if( methodMatch ) {
+				const methodName = methodMatch[ 1 ]
+				// Исключаем конструктор и стандартные методы
+				if( methodName !== "constructor" && !methodName.startsWith( "_" ) ) {
+					componentsWithProperties.get( currentClass )!.add( methodName )
+				}
+			}
+		}
+	}
+
+	return { componentsWithProperties }
 }
 
-async function findClassSymbol( tsUri: vscode.Uri, className: string ) {
-	if( ! await fileExist( tsUri ) ) return
-	const symbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', tsUri) as vscode.DocumentSymbol[]
-	const classSymbol = symbols?.[0].children.find( symb => symb.name == className )
-	return classSymbol
-}
-
-async function findPropSymbol( tsUri: vscode.Uri, className: string, propName: string ) {
-	const classSymbol = await findClassSymbol( tsUri, className )
-	const propSymbol = classSymbol?.children.find( symb => symb.name == propName )
-	return propSymbol
-}
-
-async function fileExist( uri: vscode.Uri ) {
+async function getComponentsFromFile( uri: vscode.Uri ): Promise<Map<string, Set<string>>> {
+	const componentsWithProperties = new Map<string, Set<string>>()
 	try {
-		await vscode.workspace.fs.stat( uri )
-		return true
-	} catch {
-		return false
+		const buffer = await vscode.workspace.fs.readFile( uri )
+		const content = buffer.toString()
+
+		if( !uri.path.includes( "/-/" ) && !uri.path.includes( "/-view.tree/" ) ) {
+			if( uri.path.endsWith( ".view.tree" ) ) {
+				const result = parseViewTreeFile( content )
+				for( const [ component, properties ] of result.componentsWithProperties ) {
+					componentsWithProperties.set( component, properties )
+				}
+			}
+
+			if( uri.path.endsWith( ".ts" ) ) {
+				const result = parseTsFile( content )
+				for( const [ component, properties ] of result.componentsWithProperties ) {
+					componentsWithProperties.set( component, properties )
+				}
+			}
+		}
+	} catch( error ) {
+		console.log( `[view.tree] Error reading file for component extraction ${ uri.path }:`, error )
+	}
+	return componentsWithProperties
+}
+
+async function updateSingleFile( uri: vscode.Uri ) {
+	console.log( `[view.tree] Updating single file: ${ uri.path }` )
+	// Получаем актуальные компоненты из файла
+	const components = await getComponentsFromFile( uri )
+
+	// Удаляем все компоненты которые могли быть из этого файла
+	// (так как 1 файл = 1 компонент, удаляем по ключам новых компонентов)
+	for( const component of components.keys() ) {
+		projectData.componentsWithProperties.delete( component )
+	}
+
+	// Добавляем актуальные компоненты с их свойствами
+	for( const [ component, properties ] of components ) {
+		projectData.componentsWithProperties.set( component, { properties, file: uri.path } )
+		console.log( `[view.tree] New components  ${ components } \n ${ properties }:` )
 	}
 }
 
-class Provider implements
-	vscode.DefinitionProvider
-{
-	
-	async provideDefinition(
-		document: vscode.TextDocument, 
-		position: vscode.Position, 
-		token: vscode.CancellationToken,
-	): Promise<vscode.Location[]> {
+async function removeSingleFile( uri: vscode.Uri ) {
+	console.log( `[view.tree] File deleted: ${ uri.path }` )
 
-		const range = document.getWordRangeAtPosition( position )
-		if( !range ) return []
+	// Получаем компоненты, которые были в удаленном файле
+	const componentsToRemove = await getComponentsFromFile( uri )
 
-		const nodeName = document.getText( range )
-		if( !nodeName ) return []
-
-		const nodeType = getNodeType( document, range )
-		return locationsForNode[ nodeType ]( document, range ) ?? []
-
+	// Удаляем только эти компоненты из projectData
+	for( const component of componentsToRemove.keys() ) {
+		projectData.componentsWithProperties.delete( component )
+		console.log( `[view.tree] Removed component: ${ component }` )
 	}
-	
 }
 
-const provider = new Provider()
+export function activate( context: vscode.ExtensionContext ) {
+	// Инициализируем сканирование
+	refreshProjectData()
 
-export function activate(context: vscode.ExtensionContext) {
+	// Создаем экземпляры провайдеров
+	const definitionProvider = new DefinitionProvider( () => projectData )
+	const completionProvider = new CompletionProvider( () => projectData )
+
+	// Регистрируем провайдеры для .view.tree файлов
+	const treeSelector = { scheme: "file", language: "tree" }
+
 	context.subscriptions.push(
-		vscode.languages.registerDefinitionProvider( { language: 'tree', pattern: '**/*.view.tree' }, provider ),
-		newModuleTs,
-		newModuleViewTree,
-		createViewTs,
-		createViewCssTs,
+		// Definition Provider (Go to Definition)
+		vscode.languages.registerDefinitionProvider( treeSelector, definitionProvider ),
+
+		// Completion Provider (IntelliSense)
+		vscode.languages.registerCompletionItemProvider(
+			treeSelector,
+			completionProvider,
+			"$", // Trigger completion when typing $
+			"\t", // Trigger completion when indenting
+		),
 	)
+
+	// Отслеживаем изменения файлов
+	const fileWatcher = vscode.workspace.createFileSystemWatcher( "**/*.{view.tree,ts}" )
+	context.subscriptions.push(
+		fileWatcher,
+		fileWatcher.onDidChange( updateSingleFile ),
+		fileWatcher.onDidCreate( updateSingleFile ),
+		fileWatcher.onDidDelete( removeSingleFile ),
+	)
+
+	console.log( "[view.tree] Extension activated with all providers" )
 }
